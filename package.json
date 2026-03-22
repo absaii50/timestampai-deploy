@@ -7,10 +7,11 @@
     "node": ">=20.0.0"
   },
   "scripts": {
+    "build": "npm install",
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "http-proxy-middleware": "^3.0.3"
+    "express": "4.21.2",
+    "http-proxy-middleware": "3.0.3"
   }
 }

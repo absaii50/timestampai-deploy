@@ -1,6 +1,6 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { spawn } from 'child_process';
+import { createRequire } from 'module';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,36 +9,26 @@ const PORT     = Number(process.env.PORT) || 3000;
 const API_PORT = 8080;
 const PUBLIC   = join(__dirname, 'dist', 'public');
 
-// Check critical env vars and warn (don't crash)
-const required = ['DATABASE_URL', 'ADMIN_PASSWORD', 'SESSION_SECRET'];
-const missing  = required.filter(k => !process.env[k]);
+// Check env vars and warn
+const missing = ['DATABASE_URL', 'ADMIN_PASSWORD', 'SESSION_SECRET'].filter(k => !process.env[k]);
 if (missing.length) console.warn('[WARN] Missing env vars:', missing.join(', '));
 
-// ── Start API server with auto-restart ────────────────────────────────────
-let apiProc = null;
-
-function startApi() {
-  apiProc = spawn('node', [join(__dirname, 'api.cjs')], {
-    env: { ...process.env, PORT: String(API_PORT), NODE_ENV: 'production' },
-    stdio: 'inherit',
-  });
-  apiProc.on('error', e => console.error('[API] spawn error:', e.message));
-  apiProc.on('exit', (code, signal) => {
-    if (signal === 'SIGTERM' || signal === 'SIGINT') return; // intentional shutdown
-    console.error('[API] exited with code', code, '— restarting in 3s…');
-    setTimeout(startApi, 3000);
-  });
+// ── Start API server in-process (no child process spawn needed) ───────────
+const savedPort = process.env.PORT;
+process.env.PORT = String(API_PORT);
+try {
+  const require = createRequire(import.meta.url);
+  require('./api.cjs');
+  console.log('[API] Server started on port', API_PORT);
+} catch (e) {
+  console.error('[API] Failed to load:', e.message);
 }
+process.env.PORT = savedPort;
 
-startApi();
-
-process.on('SIGTERM', () => { apiProc?.kill('SIGTERM'); process.exit(0); });
-process.on('SIGINT',  () => { apiProc?.kill('SIGTERM'); process.exit(0); });
-
-// ── Express app ───────────────────────────────────────────────────────────
+// ── Express web server ────────────────────────────────────────────────────
 const app = express();
 
-// Clean URL → HTML file mapping
+// Clean URL → HTML page mapping
 const HTML_ROUTES = {
   '/login':       'login.html',
   '/admin-login': 'admin-login.html',
@@ -54,21 +44,19 @@ for (const [route, file] of Object.entries(HTML_ROUTES)) {
 app.get('/admin',   (_req, res) => res.sendFile(join(PUBLIC, 'admin.html')));
 app.get('/admin/*', (_req, res) => res.sendFile(join(PUBLIC, 'admin.html')));
 
-// Proxy /api/* to API server
+// Proxy /api/* → API server (running in-process on API_PORT)
 app.use('/api', createProxyMiddleware({
   target: `http://localhost:${API_PORT}`,
   changeOrigin: true,
   on: {
-    error: (_err, _req, res) => {
-      res.status(503).json({ error: 'API starting up, please retry in a moment' });
-    },
+    error: (_e, _req, res) => res.status(503).json({ error: 'API starting up, please retry' }),
   },
 }));
 
-// Static files
+// Static files (JS, CSS, images)
 app.use(express.static(PUBLIC, { maxAge: '1y', index: false }));
 
-// Catch-all → index.html
+// Fallback → index.html
 app.get('*', (_req, res) => res.sendFile(join(PUBLIC, 'index.html')));
 
-app.listen(PORT, () => console.log(`[TimestampAI] Web on port ${PORT} | API on port ${API_PORT}`));
+app.listen(PORT, () => console.log(`[TimestampAI] Web on port ${PORT}`));
